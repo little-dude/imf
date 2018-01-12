@@ -1,8 +1,9 @@
 use errors::{parse_ok, Error, ErrorKind, ParseResult};
+use Buffer;
 use std::io::Write;
-use whitespaces::{read_cfws, read_fws, replace_cfws, replace_fws};
+use whitespaces::{skip_cfws, replace_cfws};
 use quoted_string::{parse_quoted_string, read_quoted_string, DEL};
-use atom::{parse_atom, parse_dot_atom, read_atom};
+use atom::{parse_atom, read_atom};
 
 /// If the given byte is an upper case alphabetical character, return the same character as lowercase. Otherwise, return the byte.
 pub fn lowercase(c: u8) -> u8 {
@@ -106,7 +107,7 @@ pub fn read_phrase(buf: &[u8]) -> ParseResult {
     while i < buf.len() {
         if let Ok((_, word)) = read_word(&buf[i..]) {
             i += word.len();
-        } else if let Ok((_, cfws)) = read_cfws(&buf[i..]) {
+        } else if let Ok((_, cfws)) = skip_cfws(&buf[i..]) {
             i += cfws.len();
         } else if buf[i] == b'.' {
             i += 1;
