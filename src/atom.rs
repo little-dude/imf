@@ -1,6 +1,6 @@
 use std::io::Write;
 
-use errors::{ErrorKind, ParseResult, parse_ok};
+use errors::{parse_ok, ErrorKind, ParseResult};
 use whitespaces::read_cfws;
 
 /// Return true if the byte represents an alphabetical character (`a-zA-Z`)
@@ -120,10 +120,10 @@ fn read_dot_atom_text(buf: &[u8]) -> ParseResult {
         if is_atext(buf[i]) {
             i += 1;
         } else if buf[i] == b'.' {
-            if i + 1 < buf.len() && is_atext(buf[i+1]) {
+            if i + 1 < buf.len() && is_atext(buf[i + 1]) {
                 i += 2;
             } else {
-                break
+                break;
             }
         } else {
             break;
@@ -150,7 +150,8 @@ mod test {
     use super::*;
 
     fn test_read<F>(f: F, input: &[u8], exp_left: &[u8], exp_read: &[u8])
-        where F: Fn(&[u8]) -> ParseResult
+    where
+        F: Fn(&[u8]) -> ParseResult,
     {
         let (left, read) = f(input).unwrap();
         assert_eq!(read, exp_read);
@@ -163,7 +164,12 @@ mod test {
         test_read(f, &b"a"[..], &b""[..], &b"a"[..]);
         test_read(f, &b"abc"[..], &b""[..], &b"abc"[..]);
         test_read(f, &b"\r\n\tabc "[..], &b""[..], &b"\r\n\tabc "[..]);
-        test_read(f, &b"!#$%&'*+-/=?^_`{}|~."[..], &b"."[..], &b"!#$%&'*+-/=?^_`{}|~"[..]);
+        test_read(
+            f,
+            &b"!#$%&'*+-/=?^_`{}|~."[..],
+            &b"."[..],
+            &b"!#$%&'*+-/=?^_`{}|~"[..],
+        );
     }
 
     #[test]
@@ -172,11 +178,21 @@ mod test {
         test_read(f, &b"a"[..], &b""[..], &b"a"[..]);
         test_read(f, &b"abc"[..], &b""[..], &b"abc"[..]);
         test_read(f, &b"\r\n\tabc "[..], &b""[..], &b"\r\n\tabc "[..]);
-        test_read(f, &b"!#$%&'*+-/=?^_`{}|~."[..], &b"."[..], &b"!#$%&'*+-/=?^_`{}|~"[..]);
+        test_read(
+            f,
+            &b"!#$%&'*+-/=?^_`{}|~."[..],
+            &b"."[..],
+            &b"!#$%&'*+-/=?^_`{}|~"[..],
+        );
 
         test_read(f, &b"a.b"[..], &b""[..], &b"a.b"[..]);
         test_read(f, &b"abc.abc"[..], &b""[..], &b"abc.abc"[..]);
         test_read(f, &b"\r\n\tabc.abc "[..], &b""[..], &b"\r\n\tabc.abc "[..]);
-        test_read(f, &b"!#$%&'*+-/=?^_`{}|~.abc"[..], &b""[..], &b"!#$%&'*+-/=?^_`{}|~.abc"[..]);
+        test_read(
+            f,
+            &b"!#$%&'*+-/=?^_`{}|~.abc"[..],
+            &b""[..],
+            &b"!#$%&'*+-/=?^_`{}|~.abc"[..],
+        );
     }
 }

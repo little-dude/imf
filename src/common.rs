@@ -1,8 +1,8 @@
-use errors::{ErrorKind, Error, ParseResult, parse_ok};
+use errors::{parse_ok, Error, ErrorKind, ParseResult};
 use std::io::Write;
-use whitespaces::{read_fws, read_cfws, replace_fws, replace_cfws};
-use quoted_string::{DEL, read_quoted_string, parse_quoted_string};
-use atom::{parse_dot_atom, read_atom, parse_atom};
+use whitespaces::{read_cfws, read_fws, replace_cfws, replace_fws};
+use quoted_string::{parse_quoted_string, read_quoted_string, DEL};
+use atom::{parse_atom, parse_dot_atom, read_atom};
 
 /// If the given byte is an upper case alphabetical character, return the same character as lowercase. Otherwise, return the byte.
 pub fn lowercase(c: u8) -> u8 {
@@ -71,7 +71,6 @@ pub fn is_special(c: u8) -> bool {
         c == b'"'
 }
 
-
 /// Return `true` is the given byte represents a visible and printable (i.e. not a space)
 /// character.
 ///
@@ -86,20 +85,16 @@ pub fn is_vchar(c: u8) -> bool {
 }
 
 pub fn read_word(buf: &[u8]) -> ParseResult {
-    read_atom(buf).or_else(|e| {
-        match *e.kind() {
-            ErrorKind::Parsing => read_quoted_string(buf),
-            _ => Err(e),
-        }
+    read_atom(buf).or_else(|e| match *e.kind() {
+        ErrorKind::Parsing => read_quoted_string(buf),
+        _ => Err(e),
     })
 }
 
 pub fn parse_word<'a, W: Write>(buf: &'a [u8], writer: &mut W) -> ParseResult<'a> {
-    parse_atom(buf, writer).or_else(|e| {
-        match *e.kind() {
-            ErrorKind::Parsing => parse_quoted_string(buf, writer),
-            _ => Err(e),
-        }
+    parse_atom(buf, writer).or_else(|e| match *e.kind() {
+        ErrorKind::Parsing => parse_quoted_string(buf, writer),
+        _ => Err(e),
     })
 }
 
@@ -126,18 +121,15 @@ pub fn parse_phrase<'a, W: Write>(buf: &'a [u8], writer: &mut W) -> ParseResult<
     let (_, word) = parse_word(buf, writer)?;
     let mut i = word.len();
     while i < buf.len() {
-
         match parse_word(&buf[i..], writer) {
             Ok((_, word)) => {
                 i += word.len();
                 continue;
             }
-            Err(e) => {
-                match *e.kind() {
-                    ErrorKind::Parsing => return Err(e),
-                    _ => {},
-                }
-            }
+            Err(e) => match *e.kind() {
+                ErrorKind::Parsing => return Err(e),
+                _ => {}
+            },
         }
 
         match replace_cfws(&buf[i..], writer) {
@@ -145,12 +137,10 @@ pub fn parse_phrase<'a, W: Write>(buf: &'a [u8], writer: &mut W) -> ParseResult<
                 i += cfws.len();
                 continue;
             }
-            Err(e) => {
-                match *e.kind() {
-                    ErrorKind::Parsing => return Err(e),
-                    _ => {},
-                }
-            }
+            Err(e) => match *e.kind() {
+                ErrorKind::Parsing => return Err(e),
+                _ => {}
+            },
         }
 
         if buf[i] == b'.' {
@@ -162,7 +152,6 @@ pub fn parse_phrase<'a, W: Write>(buf: &'a [u8], writer: &mut W) -> ParseResult<
     }
     parse_ok(buf, i)
 }
-
 
 // unstructured = (*([FWS] VCHAR) *WSP) / obs-unstruct
 // obs-utext    = %d0 / obs-NO-WS-CTL / VCHAR

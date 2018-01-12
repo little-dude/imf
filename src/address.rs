@@ -6,9 +6,22 @@ use quoted_string::{parse_quoted_string, read_quoted_string};
 use common::parse_phrase as parse_display_name;
 use common::{is_obs_no_ws_ctl, parse_word};
 
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 pub struct Address {
     local_part: Vec<u8>,
     domain: Vec<u8>,
+}
+
+impl Address {
+    pub fn parse(&mut self, buf: &[u8]) -> Result<Self, Error> {
+        let mut local_part = Cursor::new(&mut self.local_part);
+        let (_, read) = parse_new_local_part(buf, &mut local_part).or_else(|e| {
+            match *e.kind() {
+                ErrorKind::Parsing => {
+
+                }
+            }
+    }
 }
 
 /// Parse the local part of an address as defined in
@@ -193,3 +206,9 @@ fn parse_domain_literal<'a, W: Write>(buf: &'a [u8], writer: &mut W) -> ParseRes
         Err(ErrorKind::Parsing.into())
     }
 }
+
+mod test {
+    fn test_parse_domain
+}
+
+

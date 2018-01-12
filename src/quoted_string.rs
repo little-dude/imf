@@ -1,14 +1,13 @@
 use std::io::Write;
 
-use errors::{ErrorKind, ParseResult, parse_ok};
-use whitespaces::{read_fws, read_cfws, replace_fws};
+use errors::{parse_ok, ErrorKind, ParseResult};
+use whitespaces::{read_cfws, read_fws, replace_fws};
 
 /// NULL character
 pub static NULL: u8 = 0;
 
 /// Delete character
 pub static DEL: u8 = 127;
-
 
 /// Some characters are reserved for special interpretation, such as delimiting lexical tokens.  To
 /// permit use of these characters as uninterpreted data, a quoting mechanism is provided.
@@ -23,7 +22,7 @@ pub static DEL: u8 = 127;
 /// this definition is a bit convoluted, but it means that a quoted pair is basically "\" followed
 /// by any ASCII character between 0 and 127:
 ///
-///   - `obs-qp = "\" (%d0 / obs-NO-WS-CTL / LF / CR)` this is 0-8 10-31 and 127 
+///   - `obs-qp = "\" (%d0 / obs-NO-WS-CTL / LF / CR)` this is 0-8 10-31 and 127
 ///   - `quoted-pair = ("\" (VCHAR / WSP)) / obs-qp` this is 9 and 32-126
 ///
 /// See [RFC5322 section 3.2.1](https://tools.ietf.org/html/rfc5322#section-3.2.1)
@@ -68,7 +67,7 @@ fn is_valid_qtext(c: u8) -> bool {
 ///                     %d127              ;  white space characters
 /// qcontent        =   qtext / quoted-pair
 /// ```
-/// 
+///
 /// # Examples
 ///
 /// ```
@@ -99,10 +98,10 @@ pub fn parse_qcontent<'a, W: Write>(buf: &'a [u8], writer: &mut W) -> ParseResul
             b'\\' => {
                 // write whatever we parsed up to here
                 writer.write_all(&buf[last_write..i])?;
-                if i == buf.len() || buf[i+1] > 127 {
+                if i == buf.len() || buf[i + 1] > 127 {
                     return Err(ErrorKind::Parsing.into());
                 }
-                last_write = i + 1;  // buf[i] is \, we want to skip it next time we write
+                last_write = i + 1; // buf[i] is \, we want to skip it next time we write
                 i += 2;
             }
             // we expect the quoted content to be at least one valid character.
@@ -144,7 +143,7 @@ pub fn read_qcontent(buf: &[u8]) -> ParseResult {
             c if is_valid_qtext(c) => i += 1,
             b'\\' => {
                 // we expect a quoted character between 0 and 127
-                if i == buf.len() || buf[i+1] > 127 {
+                if i == buf.len() || buf[i + 1] > 127 {
                     return Err(ErrorKind::Parsing.into());
                 } else {
                     i += 2;
@@ -229,15 +228,15 @@ pub fn parse_quoted_string<'a, W: Write>(buf: &'a [u8], writer: &mut W) -> Parse
             Ok((_, fws)) => i += fws.len(),
             Err(e) => match *e.kind() {
                 ErrorKind::Io(_) => return Err(e),
-                ErrorKind::Parsing => {},  // ignore
-            }
+                ErrorKind::Parsing => {} // ignore
+            },
         }
         match parse_qcontent(&buf[i..], writer) {
             Ok((_, qcontent)) => i += qcontent.len(),
             Err(e) => match *e.kind() {
                 ErrorKind::Io(_) => return Err(e),
                 ErrorKind::Parsing => break,
-            }
+            },
         }
     }
 
@@ -250,7 +249,7 @@ pub fn parse_quoted_string<'a, W: Write>(buf: &'a [u8], writer: &mut W) -> Parse
 
     // read [CFWS]
     match read_cfws(&buf[i..]) {
-        Ok((_, cfws)) =>  parse_ok(buf, i + cfws.len()),
+        Ok((_, cfws)) => parse_ok(buf, i + cfws.len()),
         Err(_) => parse_ok(buf, i),
     }
 }
@@ -278,15 +277,15 @@ pub fn read_quoted_string(buf: &[u8]) -> ParseResult {
             Ok((_, fws)) => i += fws.len(),
             Err(e) => match *e.kind() {
                 ErrorKind::Io(_) => return Err(e),
-                ErrorKind::Parsing => {},  // ignore
-            }
+                ErrorKind::Parsing => {} // ignore
+            },
         }
         match read_qcontent(&buf[i..]) {
             Ok((_, qcontent)) => i += qcontent.len(),
             Err(e) => match *e.kind() {
                 ErrorKind::Io(_) => return Err(e),
                 ErrorKind::Parsing => break,
-            }
+            },
         }
     }
 
@@ -299,7 +298,7 @@ pub fn read_quoted_string(buf: &[u8]) -> ParseResult {
 
     // read [CFWS]
     match read_cfws(&buf[i..]) {
-        Ok((_, cfws)) =>  parse_ok(buf, i + cfws.len()),
+        Ok((_, cfws)) => parse_ok(buf, i + cfws.len()),
         Err(_) => parse_ok(buf, i),
     }
 }
@@ -311,8 +310,14 @@ mod tests {
 
     #[test]
     fn test_quoted_pair() {
-        assert_eq!(read_quoted_pair(&b"\\a"[..]).unwrap(), (&b""[..], &b"\\a"[..]));
-        assert_eq!(read_quoted_pair(&b"\\\\"[..]).unwrap(), (&b""[..], &b"\\\\"[..]));
+        assert_eq!(
+            read_quoted_pair(&b"\\a"[..]).unwrap(),
+            (&b""[..], &b"\\a"[..])
+        );
+        assert_eq!(
+            read_quoted_pair(&b"\\\\"[..]).unwrap(),
+            (&b""[..], &b"\\\\"[..])
+        );
     }
 
     fn assert_quoted_string(input: &[u8], exp_parsed: &[u8], exp_left: &[u8], exp_read: &[u8]) {
@@ -329,31 +334,35 @@ mod tests {
             b"\"simple string\"".as_ref(),
             b"simple string".as_ref(),
             b"".as_ref(),
-            b"\"simple string\"".as_ref());
+            b"\"simple string\"".as_ref(),
+        );
 
         assert_quoted_string(
             b" \t\r\n \r\n \"simple string\" (comment)\t ".as_ref(),
             b"simple string".as_ref(),
             b"".as_ref(),
-            b" \t\r\n \r\n \"simple string\" (comment)\t ".as_ref());
+            b" \t\r\n \r\n \"simple string\" (comment)\t ".as_ref(),
+        );
 
         assert_quoted_string(
             b"\"\\\"simple\\\" string\"".as_ref(),
             b"\"simple\" string".as_ref(),
             b"".as_ref(),
-            b"\"\\\"simple\\\" string\"".as_ref());
+            b"\"\\\"simple\\\" string\"".as_ref(),
+        );
 
         assert_quoted_string(
             b"\"\\\"simple\\\"\r\n string\"".as_ref(),
             b"\"simple\" string".as_ref(),
             b"".as_ref(),
-            b"\"\\\"simple\\\"\r\n string\"".as_ref());
+            b"\"\\\"simple\\\"\r\n string\"".as_ref(),
+        );
 
         assert_quoted_string(
             b"\"simple\\\nstring\"".as_ref(),
             b"simple\nstring".as_ref(),
             b"".as_ref(),
-            b"\"simple\\\nstring\"".as_ref());
-
+            b"\"simple\\\nstring\"".as_ref(),
+        );
     }
 }

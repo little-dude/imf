@@ -1,6 +1,6 @@
-use errors::{ErrorKind, ParseResult, parse_ok};
+use errors::{ErrorKind, Error, Token};
+use Buffer;
 use std::io::Write;
-
 
 /// CRLF sequence (`\r\n`)
 pub static CRLF: [u8; 2] = *b"\r\n";
@@ -22,34 +22,44 @@ fn is_wsp(c: u8) -> bool {
 /// obs-FWS         =   1*WSP *(CRLF 1*WSP)
 /// ```
 ///
+/// These definitions are equivalent to this simpler one:
+///
+/// ```no_rust
+/// FWS = (1*WSP *(CRLF 1*WSP)) / 1*(CRLF 1*WSP)
+/// ```
+///
 /// [RFC5322 section 2.2.3]: https://tools.ietf.org/html/rfc5322#section-2.2.3
-pub fn read_fws(buf: &[u8]) -> ParseResult {
-    // the two definitions above are equivalent to
-    // FWS = ([*WSP CRLF] 1*WSP) / (1*WSP *(CRLF 1*WSP))
-    if buf.is_empty() {
-        return Err(ErrorKind::Parsing.into());
+pub fn skip_fws(input: &Buffer) -> Result<usize, Error> {
+    let bytes = input.remaining();
+    if bytes.is_empty() {
+        return Err(ErrorKind::Eof.into());
     }
+
     let mut i: usize = 0;
-    while i < buf.len() {
-        match buf[i] {
+    while i < bytes.len() {
+        match bytes[i] {
             // whitespace
             c if is_wsp(c) => i += 1,
             // CRLF
             b'\r' => {
                 // we need to match LF and then a space
-                if i + 2 < buf.len() && buf[i+1] == b'\n' && is_wsp(buf[i+2]) {
+                if i + 2 < bytes.len() && bytes[i + 1] == b'\n' && is_wsp(bytes[i + 2]) {
                     i += 3;
                 } else {
                     break;
                 }
-            },
+            }
             _ => break,
         }
     }
     if i == 0 {
-        return Err(ErrorKind::Parsing.into());
+        return Err(From::from(ErrorKind::Token {
+            token: Token::Fws,
+            byte: bytes[0],
+            position: input.position(),
+        }));
     }
-    parse_ok(buf, i)
+    Ok(i)
 }
 
 /// Parse a folding whitespace (FWS): read a folding whitespace, unfold if (i.e. remove any CRLF
@@ -61,35 +71,40 @@ pub fn read_fws(buf: &[u8]) -> ParseResult {
 /// ```
 ///
 /// [RFC5322 section 2.2.3]: https://tools.ietf.org/html/rfc5322#section-2.2.3
-pub fn unfold_fws<'a, W: Write>(buf: &'a[u8], writer: &mut W) -> ParseResult<'a> {
-    if buf.is_empty() {
-        return Err(ErrorKind::Parsing.into());
+pub fn unfold_fws<W: Write>(input: &Buffer, writer: &mut W) -> Result<usize, Error> {
+    let bytes = input.remaining();
+    if bytes.is_empty() {
+        return Err(ErrorKind::Eof.into());
     }
     let mut i: usize = 0;
     let mut next_write: usize = 0;
-    while i < buf.len() {
-        match buf[i] {
+    while i < bytes.len() {
+        match bytes[i] {
             // whitespace
             c if is_wsp(c) => i += 1,
             // CRLF
             b'\r' => {
-                writer.write_all(&buf[next_write..i])?;
+                writer.write_all(&bytes[next_write..i])?;
                 // we need to match LF and then a space
-                if i + 2 < buf.len() && buf[i+1] == b'\n' && is_wsp(buf[i+2]) {
+                if i + 2 < bytes.len() && bytes[i + 1] == b'\n' && is_wsp(bytes[i + 2]) {
                     next_write = i + 2;
                     i += 3;
                 } else {
                     break;
                 }
-            },
+            }
             _ => break,
         }
     }
     if i == 0 {
-        return Err(ErrorKind::Parsing.into());
+        return Err(From::from(ErrorKind::Token {
+            token: Token::Fws,
+            byte: bytes[0],
+            position: input.position(),
+        }));
     }
-    writer.write_all(&buf[next_write..i])?;
-    parse_ok(buf, i)
+    writer.write_all(&bytes[next_write..i])?;
+    Ok(i)
 }
 
 /// Read comments. See [RFC5322 section 3.2.3]
@@ -110,19 +125,24 @@ pub fn unfold_fws<'a, W: Write>(buf: &'a[u8], writer: &mut W) -> ParseResult<'a>
 /// ```
 ///
 /// [RFC5322 section 3.2.3]: https://tools.ietf.org/html/rfc5322#section-3.2.3
-fn read_comment(buf: &[u8]) -> ParseResult {
-    if buf.len() < 2 {
-        return Err(ErrorKind::Parsing.into());
+pub fn skip_comment(input: &Buffer) -> Result<usize, Error> {
+    let bytes = input.remaining();
+    if bytes.is_empty() {
+        return Err(ErrorKind::Eof.into());
     }
-    if buf[0] != b'(' {
-        return Err(ErrorKind::Parsing.into());
+    if bytes[0] != b'(' {
+        return Err(From::from(ErrorKind::Token {
+            token: Token::Comment,
+            byte: bytes[0],
+            position: input.position(),
+        }));
     }
     // comments can be nested. Since we already found an opening parenthesis, we start at 1.
     let mut nested_level = 1;
 
     let mut i: usize = 1;
-    while i < buf.len() {
-        match buf[i] {
+    while i < bytes.len() {
+        match bytes[i] {
             b'\\' => {
                 // we want to ignore the next character, since it's escaped
                 i += 2;
@@ -131,17 +151,17 @@ fn read_comment(buf: &[u8]) -> ParseResult {
             b')' => {
                 nested_level -= 1;
                 if nested_level == 0 {
-                    return parse_ok(buf, i+1);
+                    return Ok(i+1);
                 }
             }
             b'(' => nested_level += 1,
             // ignore any other character
             _ => {}
         }
-
         i += 1
     }
-    Err(ErrorKind::Parsing.into())
+    // we reached the end of the buffer without seeing the closing parenthesis
+    Err(ErrorKind::Eof.into())
 }
 
 /// Read CFWS. See [RFC5322 section 3.2.3].
@@ -151,46 +171,59 @@ fn read_comment(buf: &[u8]) -> ParseResult {
 /// ```
 ///
 /// [RFC5322 section 3.2.3]: https://tools.ietf.org/html/rfc5322#section-3.2.3
-pub fn read_cfws(buf: &[u8]) -> ParseResult {
-    if buf.is_empty() {
-        return Err(ErrorKind::Parsing.into());
+pub fn skip_cfws(input: &Buffer) -> Result<usize, Error> {
+    let bytes = input.remaining();
+    if bytes.is_empty() {
+        return Err(ErrorKind::Eof.into());
     }
 
+    let pos = input.position();
+    let mut buffer = input.clone();
     let mut i: usize = 0;
-    while i < buf.len() {
-        if let Ok((_, fws)) = read_fws(&buf[i..]) {
-            i += fws.len();
+
+    while i < bytes.len() {
+        // read a FWS
+        buffer.set_position(pos + i);
+        if let Ok(len) = skip_fws(&buffer) {
+            i += len;
         }
-        match read_comment(&buf[i..]) {
-            Ok((_, comment)) => i += comment.len(),
+
+        // read a comment
+        buffer.set_position(pos + i);
+        match skip_comment(&buffer) {
+            Ok(len) => i += len,
             Err(_) => {
                 if i == 0 {
                     // We're supposed to read at least one comment or one FWS
                     // So it's an error not to read anything
-                    return Err(ErrorKind::Parsing.into());
+                    return Err(From::from(ErrorKind::Token {
+                        token: Token::Cfws,
+                        byte: bytes[0],
+                        position: input.position(),
+                    }));
                 } else {
-                    return parse_ok(buf, i);
+                    return Ok(i);
                 }
             }
         }
     }
-    if i > 0 {
-        parse_ok(buf, i)
-    } else {
-        Err(ErrorKind::Parsing.into())
-    }
+
+    assert!(i == bytes.len());
+    Err(ErrorKind::Eof.into())
 }
 
-pub fn replace_cfws<'a, W: Write>(buf: &'a[u8], writer: &mut W) -> ParseResult<'a> {
-    let res = read_cfws(buf)?;
+pub fn replace_cfws<W: Write>(input: &Buffer, writer: &mut W) -> Result<usize, Error> {
+    let len = skip_cfws(input)?;
+    // If we're here, then we read a CFWS. Let's replace it by a single space.
     writer.write_all(&b" "[..])?;
-    Ok(res)
+    Ok(len)
 }
 
-pub fn replace_fws<'a, W: Write>(buf: &'a[u8], writer: &mut W) -> ParseResult<'a> {
-    let res = read_fws(buf)?;
+pub fn replace_fws<W: Write>(input: &Buffer, writer: &mut W) -> Result<usize, Error> {
+    let len = skip_fws(input)?;
+    // If we're here, then we read a CFWS. Let's replace it by a single space.
     writer.write_all(&b" "[..])?;
-    Ok(res)
+    Ok(len)
 }
 
 /// Unfold CFWS. See [RFC5322 section 3.2.3].
@@ -200,188 +233,146 @@ pub fn replace_fws<'a, W: Write>(buf: &'a[u8], writer: &mut W) -> ParseResult<'a
 /// ```
 ///
 /// [RFC5322 section 3.2.3]: https://tools.ietf.org/html/rfc5322#section-3.2.3
-pub fn unfold_cfws<'a, W: Write>(buf: &'a[u8], writer: &mut W) -> ParseResult<'a> {
-    if buf.is_empty() {
-        return Err(ErrorKind::Parsing.into());
+pub fn unfold_cfws<W: Write>(input: &Buffer, writer: &mut W) -> Result<usize, Error> {
+    let bytes = input.remaining();
+    if bytes.is_empty() {
+        return Err(ErrorKind::Eof.into());
     }
 
+    let pos = input.position();
+    let mut buffer = input.clone();
     let mut i: usize = 0;
-    while i < buf.len() {
-        match unfold_fws(&buf[i..], writer) {
-            Ok((_, fws)) => i += fws.len(),
+
+    while i < bytes.len() {
+        buffer.set_position(pos + i);
+        match unfold_fws(&buffer, writer) {
+            Ok(len) => i += len,
             Err(e) => {
                 match *e.kind() {
                     // ignore parsing errors, since this token is not mandatory
-                    ErrorKind::Parsing => {},
+                    ErrorKind::Token { .. } | ErrorKind::Eof => {}
                     // propagate the other errors
                     _ => return Err(e),
                 }
             }
         }
-        match read_comment(&buf[i..]) {
-            Ok((_, comment)) => i += comment.len(),
+
+        buffer.set_position(pos + i);
+        match skip_comment(&buffer) {
+            Ok(len) => i += len,
             Err(_) => {
                 if i == 0 {
                     // We're supposed to read at least one comment or one FWS
                     // So it's an error not to read anything
-                    return Err(ErrorKind::Parsing.into());
+                    return Err(From::from(ErrorKind::Token {
+                        token: Token::Cfws,
+                        byte: bytes[0],
+                        position: pos,
+                    }));
                 } else {
-                    return parse_ok(buf, i);
+                    return Ok(i);
                 }
             }
         }
     }
-    if i > 0 {
-        parse_ok(buf, i)
-    } else {
-        Err(ErrorKind::Parsing.into())
-    }
+
+    assert!(i > 0);
+    Ok(i)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // create a new buffer from an ascii string
+    macro_rules! b {
+        ($e:expr) => (&Buffer::new($e.as_ref()));
+    }
+
+    // the ok! macro makes sure parsing succeeds and the expect number of bytes is read
+    macro_rules! ok {
+        ($function:ident, $bytes:expr, $expected_len:expr) => (assert_eq!($function(b!($bytes)).unwrap(), $expected_len));
+    }
+
+    // the eof! macro makes sure parsing fails with ErrorKind::Eof
+    macro_rules! eof {
+        ($function:ident, $bytes:expr) => (assert!($function(b!($bytes)).unwrap_err().is_eof()));
+    }
+
+    // the tok! macro makes sure parsing fails with ErrorKind::Token
+    macro_rules! tok {
+        ($function:ident, $bytes:expr, $token:expr, $byte:expr, $position:expr) => (
+            let e = $function(b!($bytes)).unwrap_err();
+            if let ErrorKind::Token { token, byte, position } = *e.kind() {
+                assert_eq!(token, $token);
+                assert_eq!(byte, $byte);
+                assert_eq!(position, $position);
+            }
+        );
+        ($function:ident, $bytes:expr) => (
+            let e = $function(b!($bytes)).unwrap_err();
+            assert!(e.is_token());
+        )
+    }
+
     #[test]
     fn test_comment() {
-        assert_eq!(
-            read_comment(&b"()"[..]).unwrap(),
-            (&b""[..], &b"()"[..])
-        );
-        assert_eq!(
-            read_comment(&b"(abc)"[..]).unwrap(),
-            (&b""[..], &b"(abc)"[..])
-        );
-        assert_eq!(
-            read_comment(&b"(a comment)abc"[..]).unwrap(),
-            (&b"abc"[..], &b"(a comment)"[..])
-        );
-        assert_eq!(
-            read_comment(&b"(a (nested (comment)))abc"[..]).unwrap(),
-            (&b"abc"[..], &b"(a (nested (comment)))"[..])
-        );
-        assert_eq!(
-            read_comment(&b"(a (nested \\((comment)\\)\\)))abc"[..]).unwrap(),
-            (&b"abc"[..], &b"(a (nested \\((comment)\\)\\)))"[..])
-        );
+        ok!(skip_comment, b"()", 2);
+        ok!(skip_comment, b"(abc)", 5);
+        ok!(skip_comment, b"(a comment)abc", 11);
+        ok!(skip_comment, b"(a (nested (comment)))abc", 22);
+        ok!(skip_comment, b"(a (nested \\((comment)\\)\\)))abc", 28);
+        // negative tests
+        eof!(skip_comment, b"(");
+        eof!(skip_comment, b"(comment\\)");
+        eof!(skip_comment, b"(comment()comment");
+        tok!(skip_comment, b"fail", Token::Comment, b'f', 0);
+        tok!(skip_comment, b"\\(", Token::Comment, b'\\', 0);
     }
 
     #[test]
     fn test_folding_whitespace() {
-        assert_eq!(read_fws(&b" "[..]).unwrap(), (&b""[..], &b" "[..]));
-        assert_eq!(read_fws(&b" \t"[..]).unwrap(), (&b""[..], &b" \t"[..]));
-        assert_eq!(read_fws(&b" abc"[..]).unwrap(), (&b"abc"[..], &b" "[..]));
-        assert_eq!(read_fws(&b"\tabc"[..]).unwrap(), (&b"abc"[..], &b"\t"[..]));
-        assert_eq!(
-            read_fws(&b"\t abc"[..]).unwrap(),
-            (&b"abc"[..], &b"\t "[..])
-        );
-        assert_eq!(
-            read_fws(&b" \r\n abc"[..]).unwrap(),
-            (&b"abc"[..], &b" \r\n "[..])
-        );
-        assert_eq!(
-            read_fws(&b" \r\n \r\n\tabc"[..]).unwrap(),
-            (&b"abc"[..], &b" \r\n \r\n\t"[..])
-        );
-        assert_eq!(
-            read_fws(&b" \r\nabc"[..]).unwrap(),
-            (&b"\r\nabc"[..], &b" "[..])
-        );
-        assert_eq!(
-            read_fws(&b" \r\n  \r\n \r\nabc"[..]).unwrap(),
-            (&b"\r\nabc"[..], &b" \r\n  \r\n "[..])
-        );
-
-        // new folding whitespaces
-        assert_eq!(
-            read_fws(&b"\r\n   abc"[..]).unwrap(),
-            (&b"abc"[..], &b"\r\n   "[..])
-        );
-        assert_eq!(
-            read_fws(&b"\r\n \t  abc"[..]).unwrap(),
-            (&b"abc"[..], &b"\r\n \t  "[..])
-        );
-
-        // failing cases
-        assert!(read_fws(&b"\r\nabc"[..]).is_err());
-        assert!(read_fws(&b"\r abc"[..]).is_err());
-        assert!(read_fws(&b"\n\r abc"[..]).is_err());
+        ok!(skip_fws, b" ", 1);
+        ok!(skip_fws, b" \t", 2);
+        ok!(skip_fws, b" abc", 1);
+        ok!(skip_fws, b"\tabc", 1);
+        ok!(skip_fws, b"\t abc", 2);
+        ok!(skip_fws, b" \r\n abc", 4);
+        ok!(skip_fws, b" \r\n \r\n\tabc", 7);
+        ok!(skip_fws, b" \r\nabc", 1);
+        ok!(skip_fws, b" \r\n  \r\n \r\nabc", 8);
+        ok!(skip_fws, b"\r\n   abc", 5);
+        ok!(skip_fws, b"\r\n \t  abc", 6);
+        // ideally it should fail at index 2 on the "a"
+        tok!(skip_fws, b"\r\nabc", Token::Fws, b'\r', 0);
+        // ideally it should fail at index 1 on the " "
+        tok!(skip_fws, b"\r abc", Token::Fws, b'\r', 0);
+        tok!(skip_fws, b"\n\r abc", Token::Fws, b'\n', 0);
     }
 
     #[test]
     fn test_cfws() {
-        // fws test cases
-        assert_eq!(read_cfws(&b" "[..]).unwrap(), (&b""[..], &b" "[..]));
-        assert_eq!(read_cfws(&b" \t"[..]).unwrap(), (&b""[..], &b" \t"[..]));
-        assert_eq!(read_cfws(&b" abc"[..]).unwrap(), (&b"abc"[..], &b" "[..]));
-        assert_eq!(read_cfws(&b"\tabc"[..]).unwrap(), (&b"abc"[..], &b"\t"[..]));
-        assert_eq!(
-            read_cfws(&b"\t abc"[..]).unwrap(),
-            (&b"abc"[..], &b"\t "[..])
-        );
-        assert_eq!(
-            read_cfws(&b" \r\n abc"[..]).unwrap(),
-            (&b"abc"[..], &b" \r\n "[..])
-        );
-        assert_eq!(
-            read_cfws(&b" \r\n \r\n\tabc"[..]).unwrap(),
-            (&b"abc"[..], &b" \r\n \r\n\t"[..])
-        );
-        assert_eq!(
-            read_cfws(&b" \r\nabc"[..]).unwrap(),
-            (&b"\r\nabc"[..], &b" "[..])
-        );
-        assert_eq!(
-            read_cfws(&b" \r\n  \r\n \r\nabc"[..]).unwrap(),
-            (&b"\r\nabc"[..], &b" \r\n  \r\n "[..])
-        );
-        assert_eq!(
-            read_cfws(&b"\r\n   abc"[..]).unwrap(),
-            (&b"abc"[..], &b"\r\n   "[..])
-        );
-        assert_eq!(
-            read_cfws(&b"\r\n \t  abc"[..]).unwrap(),
-            (&b"abc"[..], &b"\r\n \t  "[..])
-        );
-        assert!(read_cfws(&b"\r\nabc"[..]).is_err());
-        assert!(read_cfws(&b"\r abc"[..]).is_err());
-        assert!(read_cfws(&b"\n\r abc"[..]).is_err());
-
-        // comment test cases
-        assert_eq!(
-            read_cfws(&b"(a comment)abc"[..]).unwrap(),
-            (&b"abc"[..], &b"(a comment)"[..])
-        );
-        assert_eq!(
-            read_cfws(&b"(a (nested (comment)))abc"[..]).unwrap(),
-            (&b"abc"[..], &b"(a (nested (comment)))"[..])
-        );
-        assert_eq!(
-            read_cfws(&b"(a (nested \\((comment)\\)\\)))abc"[..]).unwrap(),
-            (&b"abc"[..], &b"(a (nested \\((comment)\\)\\)))"[..])
-        );
-
-        // mixed test cases
-        assert_eq!(
-            read_cfws(&b"  (a comment)  abc"[..]).unwrap(),
-            (&b"abc"[..], &b"  (a comment)  "[..])
-        );
-        assert_eq!(
-            read_cfws(&b"(a comment)  abc"[..]).unwrap(),
-            (&b"abc"[..], &b"(a comment)  "[..])
-        );
-        assert_eq!(
-            read_cfws(&b"  (a comment)abc"[..]).unwrap(),
-            (&b"abc"[..], &b"  (a comment)"[..])
-        );
-        assert_eq!(
-            read_cfws(&b"  (  a comment ( ) ()\r\n)  abc"[..]).unwrap(),
-            (&b"abc"[..], &b"  (  a comment ( ) ()\r\n)  "[..])
-        );
-        assert_eq!(
-            read_cfws(&b"(a comment)  () ()abc"[..]).unwrap(),
-            (&b"abc"[..], &b"(a comment)  () ()"[..])
-        );
+        ok!(skip_cfws, b" ", 1);
+        ok!(skip_cfws, b" \t", 2);
+        ok!(skip_cfws, b" abc", 1);
+        ok!(skip_cfws, b"\tabc", 1);
+        ok!(skip_cfws, b"\t abc", 2);
+        ok!(skip_cfws, b" \r\n abc", 4);
+        ok!(skip_cfws, b" \r\n \r\n\tabc", 7);
+        ok!(skip_cfws, b" \r\nabc", 1);
+        ok!(skip_cfws, b" \r\n  \r\n \r\nabc", 8);
+        ok!(skip_cfws, b"\r\n   abc", 5);
+        ok!(skip_cfws, b"\r\n \t  abc", 6);
+        tok!(skip_cfws, b"\r\nabc", Token::Cfws, b'\r', 0);
+        tok!(skip_cfws, b"\r abc", Token::Cfws, b'\r', 0);
+        tok!(skip_cfws, b"\n\r abc", Token::Cfws, b'\n', 0);
+        ok!(skip_cfws, b"(a comment)abc", 11);
+        ok!(skip_cfws, b"(a (nested (comment)))abc", b"(a (nested (comment)))".len());
+        ok!(skip_cfws, b"(a (nested \\((comment)\\)\\)))abc", 28);
+        ok!(skip_cfws, b"  (a comment)  abc", 15);
+        ok!(skip_cfws, b"(a comment)  abc", 13);
+        ok!(skip_cfws, b"  (a comment)abc", 13);
+        ok!(skip_cfws, b"  (  a comment ( ) ()\r\n)  abc", 26);
+        ok!(skip_cfws, b"(a comment)  () ()abc", 18);
     }
 }
